@@ -1,0 +1,5 @@
+.direnv
+.cache
+compile_commands.json
+Testing
+tools

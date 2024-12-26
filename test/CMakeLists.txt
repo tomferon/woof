@@ -1,20 +1,15 @@
 add_executable(woof_tests)
 
-target_link_libraries(woof_tests
-  PRIVATE
-    woof_core
-    Catch2::Catch2WithMain
-)
+target_link_libraries(woof_tests PRIVATE woof_core Catch2::Catch2WithMain)
 
 target_sources(woof_tests
-  PUBLIC
-    FILE_SET woof_test_modules TYPE CXX_MODULES
-    FILES
-      driver.cppm
+    PUBLIC FILE_SET woof_test_modules TYPE CXX_MODULES FILES
+    driver.cppm
 
-  PRIVATE
+    PRIVATE
     tests.cpp # FIXME
     jobs_test.cpp
+    http_server_test.cpp
     driver.cpp
 )
 

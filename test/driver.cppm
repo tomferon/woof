@@ -10,35 +10,36 @@ import woof.engine;
 import woof.jobs;
 
 namespace woof::tests {
-export class Server {
+export class Server final {
 public:
-	std::uint64_t submitJob(const JobSpec&);
-	[[nodiscard]] JobSpec getJob(std::uint64_t jobId) const;
+    std::uint64_t submitJob(const JobSpec&);
+
+    [[nodiscard]] JobSpec getJob(std::uint64_t jobId) const;
 
 private:
-	Engine engine{};
+    Engine engine{};
 };
 
-export class JobNotFoundMatcher : public Catch::Matchers::MatcherGenericBase {
+export class JobNotFoundMatcher final : public Catch::Matchers::MatcherGenericBase {
 public:
-	explicit JobNotFoundMatcher(const std::uint64_t jobId): jobId{jobId} {}
+    explicit JobNotFoundMatcher(const std::uint64_t jobId): jobId{jobId} { }
 
-	[[nodiscard]] bool match(const JobNotFound& exc) const
-	{
-		return exc.jobId == jobId;
-	}
+    [[nodiscard]] bool match(const JobNotFound& exc) const
+    {
+        return exc.jobId == jobId;
+    }
 
-	std::string describe() const override
-	{
-		return std::format("Is a JobNotFound exception with jobId = {}", jobId);
-	}
+    std::string describe() const override
+    {
+        return std::format("Is a JobNotFound exception with jobId = {}", jobId);
+    }
 
 private:
-	std::uint64_t jobId;
+    std::uint64_t jobId;
 };
 
 export JobNotFoundMatcher isJobNotFound(const std::uint64_t jobId)
 {
-	return JobNotFoundMatcher{jobId};
+    return JobNotFoundMatcher{jobId};
 }
 }

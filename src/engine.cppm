@@ -11,25 +11,28 @@ import woof.jobs;
 
 namespace woof {
 export struct JobNotFound final : std::exception {
-    std::uint64_t jobId;
+    JobId jobId;
+    std::string jobIdStr;
 
-    explicit JobNotFound(const std::uint64_t jobId)
-        : jobId(jobId)
+    explicit JobNotFound(const JobId jobId)
+        : jobId(jobId), jobIdStr{jobId.toString()}
     { }
 
     [[nodiscard]] const char* what() const noexcept override
     {
-        return std::to_string(jobId).c_str();
+        return jobIdStr.c_str();
     }
 };
 
 export class Engine final {
 public:
-    std::uint64_t addJob(const JobSpec&);
+    JobId addJob(const JobSpec&);
 
-    [[nodiscard]] const JobSpec& getJob(std::uint64_t jobId) const;
+    [[nodiscard]] const Job& getJob(JobId) const;
+
+    [[nodiscard]] std::map<JobId, const Job&> getJobs(JobId) const;
 
 private:
-    std::map<uint64_t, JobSpec> jobs;
+    std::map<JobId, Job> jobs;
 };
 }

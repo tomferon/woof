@@ -17,6 +17,7 @@ if(CMAKE_EXPORT_COMPILE_COMMANDS)
 endif()
 
 find_package(Catch2 3.7.1 REQUIRED)
+find_package(nlohmann_json 3.11.3 REQUIRED)
 
 add_subdirectory(src)
 add_subdirectory(test)

@@ -5,8 +5,13 @@ module;
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
 #include <boost/beast/version.hpp>
+#include <nlohmann/json.hpp>
 
 module woof.http_server;
+
+import woof.api;
+import woof.jobs;
+import woof.engine;
 
 using namespace woof::http_server;
 
@@ -14,17 +19,6 @@ namespace ip = boost::asio::ip;
 using tcp = ip::tcp;
 namespace http = boost::beast::http;
 using namespace std::literals;
-
-static const auto router =
-    "test" / capture(std::function{[](std::string_view str) {
-        return method(
-            http::verb::get,
-            std::function{[str](const http::request<http::string_body>& request) {
-                auto response = http::response<http::string_body>{http::status::ok, request.version()};
-                response.body() = str;
-                return response;
-            }});
-    }});
 
 void Connection::readRequest()
 {
@@ -52,6 +46,7 @@ void Connection::readRequest()
     });
 }
 
+// FIXME: Reimplement using string_view to be more idiomatic.
 std::vector<std::string_view> splitFragments(std::string_view path)
 {
     std::vector<std::string_view> fragments{};
@@ -68,17 +63,32 @@ std::vector<std::string_view> splitFragments(std::string_view path)
     return fragments;
 }
 
+std::unordered_map<std::string, std::string> parseQueryString(const http::request<http::string_body>& request)
+{
+    std::unordered_map<std::string, std::string> params{};
+    std::string_view path{request.target()};
+    if (const auto startPos = path.find('?'); startPos != std::string_view::npos) {
+        path.remove_prefix(startPos);
+        while (!path.empty()) {
+            path.remove_prefix(1); // Skip ? or &
+            const auto ampPos = path.find('&');
+            std::string_view kvString{path.substr(0, ampPos)};
+            const auto eqPos = kvString.find('=');
+            const std::string key{kvString.substr(0, eqPos)};
+            const std::string value{kvString.substr(eqPos + 1)};
+            params[key] = value;
+            if (ampPos == std::string_view::npos) {
+                break;
+            }
+            path.remove_prefix(ampPos);
+        }
+    }
+    return params;
+}
+
 void Connection::handleRequest()
 {
-    auto response = std::make_shared<http::response<http::string_body>>(
-        http::status::internal_server_error, request.version());
-    try {
-        std::vector<std::string_view> fragments = splitFragments(request.target());
-        *response = router->handle(request.method(), std::span{fragments.data(), fragments.size()}, request);
-    } catch (const RouteDoesntMatch&) {
-        *response = http::response<http::string_body>(http::status::not_found, request.version());
-    }
-
+    auto response = std::make_shared<http::response<http::string_body>>(handler(request));
     // FIXME: Capture version from CMake and return Server: Woof/X.Y
     response->set(http::field::server, BOOST_BEAST_VERSION_STRING);
     bool keepAlive = request.keep_alive();
@@ -108,7 +118,9 @@ void Connection::close()
     std::cout << ec2.message() << std::endl;
 }
 
-Server::Server(const std::string_view host, const unsigned short port)
+Server::Server(const std::string_view host, const unsigned short port,
+    std::function<http::response<http::string_body>(const http::request<http::string_body>&)> handler)
+    : handler{std::move(handler)}
 {
     const auto endpoint = tcp::endpoint{ip::make_address(host), port};
     // FIXME: handle errors
@@ -122,7 +134,7 @@ Server::Server(const std::string_view host, const unsigned short port)
 
 void Server::accept()
 {
-    const auto conn = Connection::construct(ioContext);
+    const auto conn = Connection::construct(ioContext, handler);
     const auto server = shared_from_this();
     acceptor.async_accept(conn->getSocket(), [=](boost::system::error_code ec) {
         // FIXME: handle ec
@@ -134,4 +146,79 @@ void Server::accept()
 void Server::handleRequests()
 {
     ioContext.run();
+}
+
+http::response<http::string_body> Handler::handleRequest(const http::request<http::string_body>& request)
+{
+    try {
+        std::vector<std::string_view> fragments = splitFragments(request.target());
+        return router->handle(request.method(), std::span{fragments.data(), fragments.size()}, request);
+    } catch (const RouteDoesntMatch&) {
+        return http::response<http::string_body>{http::status::not_found, request.version()};
+    }
+}
+
+auto Handler::makeRouter()
+    -> std::unique_ptr<Matcher<http::response<http::string_body>, const http::request<http::string_body>&>>
+{
+    using namespace std::placeholders;
+    using handler = http::response<http::string_body>(const http::request<http::string_body>&);
+
+    auto getHealthEndpoint = "health" / method(
+        http::verb::get,
+        std::function<handler>{[this](const auto& request) { return getHealth(request); }}
+    );
+
+    auto jobsEndpoints = "jobs" / routes({
+        capture(std::function{
+            [this](JobId jobId) {
+                return method(http::verb::get,
+                    std::function<handler>{[this, jobId](const auto& request) { return getJob(jobId, request); }});
+            }
+        }),
+        method(http::verb::post, std::function<handler>{[this](const auto& request) { return postJob(request); }}),
+    });
+
+    return routes({std::move(getHealthEndpoint), std::move(jobsEndpoints)});
+}
+
+http::response<http::string_body> Handler::getHealth(const http::request<http::string_body>& request)
+{
+    auto response = http::response<http::string_body>{http::status::ok, request.version()};
+    response.set(http::field::content_type, "text/plain");
+    response.body() = "Healthy";
+    return response;
+}
+
+http::response<http::string_body> Handler::getJob(const JobId jobId, const http::request<http::string_body>& request)
+{
+    try {
+        const auto params = parseQueryString(request);
+        const bool closure = params.contains("closure") && params.at("closure") == "true";
+        const auto jobs = server.getJobs(jobId, closure);
+        auto response = http::response<http::string_body>{http::status::ok, request.version()};
+        response.set(http::field::content_type, "application/json");
+        response.body() = api::JobSetFrom{jobs}.toJson().dump();
+        return response;
+    } catch (const JobNotFound&) {
+        return http::response<http::string_body>{http::status::not_found, request.version()};
+    }
+}
+
+http::response<http::string_body> Handler::postJob(const http::request<http::string_body>& request)
+{
+    // FIXME: Handle wrong body
+    const auto jobSpecs = api::JobSetTo{nlohmann::json::parse(request.body())}.toJobSpecs();
+    const auto jobIds = server.addJobs(jobSpecs);
+
+    auto response = http::response<http::string_body>{http::status::created, request.version()};
+    response.set(http::field::content_type, "application/json");
+    auto jobIdsJson = jobIds
+        | std::views::transform([](const auto& pair) {
+            auto [name, jobId] = pair;
+            return std::pair{name, jobId.toString()};
+        })
+        | std::ranges::to<std::map<std::string, std::string>>();
+    response.body() = nlohmann::json{{"jobIds", jobIdsJson}}.dump();
+    return response;
 }

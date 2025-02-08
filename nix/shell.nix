@@ -1,6 +1,6 @@
 { pkgs }:
 
-pkgs.clang19Stdenv.mkDerivation (rec {
+pkgs.clang19Stdenv.mkDerivation {
   name = "shell";
   buildInputs = with pkgs; [
     boost186
@@ -8,5 +8,6 @@ pkgs.clang19Stdenv.mkDerivation (rec {
     cmake
     cmake-language-server
     ninja
+    nlohmann_json
   ];
-})
+}

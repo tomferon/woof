@@ -7,6 +7,9 @@ module;
 
 export module woof.http_server;
 
+import woof.jobs;
+import woof.server;
+
 namespace ip = boost::asio::ip;
 using tcp = ip::tcp;
 namespace http = boost::beast::http;
@@ -119,7 +122,7 @@ public:
     {
         matchers.reserve(ms.size());
         for (auto& matcher: ms) {
-            matchers.push_back(std::move(const_cast<std::unique_ptr<Matcher<Result>>&>(matcher)));
+            matchers.push_back(std::move(const_cast<std::unique_ptr<Matcher<Result, Params...>>&>(matcher)));
         }
     }
 
@@ -134,7 +137,7 @@ public:
     }
 
 private:
-    std::vector<std::unique_ptr<Matcher<Result>>> matchers;
+    std::vector<std::unique_ptr<Matcher<Result, Params...>>> matchers;
 };
 
 export template<typename Result, typename... Params>
@@ -144,11 +147,13 @@ auto routes(std::initializer_list<std::unique_ptr<Matcher<Result, Params...>>>&&
     return std::make_unique<RoutesMatcher<Result, Params...>>(std::move(matchers));
 }
 
+using RequestHandler = std::function<http::response<http::string_body>(const http::request<http::string_body>&)>;
+
 class Connection final : public std::enable_shared_from_this<Connection> {
 public:
-    static std::shared_ptr<Connection> construct(boost::asio::io_context& ioContext)
+    static std::shared_ptr<Connection> construct(boost::asio::io_context& ioContext, RequestHandler& handler)
     {
-        return std::shared_ptr<Connection>{new Connection(ioContext)};
+        return std::shared_ptr<Connection>{new Connection(ioContext, handler)};
     }
 
     void readRequest();
@@ -159,8 +164,10 @@ private:
     tcp::socket socket;
     boost::beast::flat_buffer buffer{};
     http::request<http::string_body> request{};
+    RequestHandler& handler;
 
-    explicit Connection(boost::asio::io_context& ioContext): socket{ioContext} { }
+    explicit Connection(boost::asio::io_context& ioContext, RequestHandler& handler)
+        : socket{ioContext}, handler{handler} { }
 
     void handleRequest();
 
@@ -169,9 +176,9 @@ private:
 
 export class Server final : public std::enable_shared_from_this<Server> {
 public:
-    static std::shared_ptr<Server> construct(const std::string_view host, const unsigned short port)
+    static std::shared_ptr<Server> construct(const std::string_view host, const unsigned short port, RequestHandler handler)
     {
-        return std::shared_ptr<Server>{new Server{host, port}};
+        return std::shared_ptr<Server>{new Server{host, port, std::move(handler)}};
     }
 
     void handleRequests();
@@ -179,9 +186,29 @@ public:
 private:
     boost::asio::io_context ioContext;
     tcp::acceptor acceptor{ioContext};
+    RequestHandler handler;
 
-    Server(std::string_view host, unsigned short port);
+    Server(std::string_view host, unsigned short port, RequestHandler handler);
 
     void accept();
+};
+
+// FIXME: Separate this app-specific code from the generic code above.
+export class Handler final {
+public:
+    explicit Handler(woof::Server&& server): server{server}, router{makeRouter()} { }
+
+    http::response<http::string_body> handleRequest(const http::request<http::string_body>&);
+
+private:
+    auto makeRouter()
+        -> std::unique_ptr<Matcher<http::response<http::string_body>, const http::request<http::string_body>&>>;
+
+    http::response<http::string_body> getHealth(const http::request<http::string_body>&);
+    http::response<http::string_body> postJob(const http::request<http::string_body>&);
+    http::response<http::string_body> getJob(woof::JobId, const http::request<http::string_body>&);
+
+    woof::Server server;
+    std::unique_ptr<Matcher<http::response<http::string_body>, const http::request<http::string_body>&>> router;
 };
 };

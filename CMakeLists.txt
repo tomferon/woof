@@ -18,6 +18,7 @@ endif()
 
 find_package(Catch2 3.7.1 REQUIRED)
 find_package(nlohmann_json 3.11.3 REQUIRED)
+find_package(Boost 1.86.0 REQUIRED COMPONENTS program_options)
 
 add_subdirectory(src)
 add_subdirectory(test)
